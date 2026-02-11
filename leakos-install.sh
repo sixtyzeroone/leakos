@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
 # =============================================================================
-# LeakOS Linux - LiveCD → HDD Installer (Zenity GUI) - Versi ULTIMATE + cfdisk
+# LeakOS Linux - LiveCD → HDD Installer (VIRTUALBOX FIX)
 # =============================================================================
 
 set -euo pipefail
 
-# Banner dense style - AMPERSAND SUDAH DI-ESCAPE dengan &amp;
-LEAKOS_BANNER_PANGO="
-<span foreground='#00ff00'>╔════════════════════════════════════════════════════════════╗</span>
-<span foreground='#00ff00'>║</span>                  <span foreground='red'><b>L E A K O S   L I N U X</b></span>                  <span foreground='#00ff00'>║</span>
-<span foreground='#00ff00'>║</span>     <span foreground='red'>Unleashed Freedom • Privacy First • Indonesian Root</span>     <span foreground='#00ff00'>║</span>
-<span foreground='#00ff00'>║</span>          <span foreground='red'>Custom LFS Distro - Pentest / Developer Ready</span>           <span foreground='#00ff00'>║</span>
-<span foreground='#00ff00'>╚════════════════════════════════════════════════════════════╝</span>
+# Banner
+LEAKOS_BANNER="
+╔════════════════════════════════════════════════════════════╗
+║                  L E A K O S   L I N U X                  ║
+║     Unleashed Freedom • Privacy First • Indonesian Root    ║
+║          Custom LFS Distro - Pentest / Developer Ready     ║
+╚════════════════════════════════════════════════════════════╝
+"
 
-<span foreground='#00ff00'> LeakOS v1.x (C) 2025-2026 leakos.dev | Built on LFS</span>"
+# Fix untuk VirtualBox - Skip CD-ROM dan pilih HDD
+export GTK_THEME=Adwaita
+export NO_AT_BRIDGE=1
 
-# Banner tanpa markup untuk fallback
-LEAKOS_BANNER_PLAIN="
-=============================================
-          L E A K O S   L I N U X
-     Unleashed Freedom • Privacy First
-============================================="
-
-# Pastikan dijalankan sebagai root
+# Cek root
 if [ "$(id -u)" -ne 0 ]; then
     zenity --error --title="Akses Ditolak" --text="Jalankan sebagai root:\nsudo bash $0" --width=400
     exit 1
@@ -31,333 +27,410 @@ fi
 # Cek dependencies
 command -v zenity >/dev/null 2>&1 || { echo "Zenity tidak ditemukan!"; exit 1; }
 command -v cfdisk >/dev/null 2>&1 || { 
-    zenity --error --text="cfdisk tidak ditemukan! Install dengan: apt install cfdisk" 
+    zenity --error --text="cfdisk tidak ditemukan! Install: apt install cfdisk" 
     exit 1
 }
 
-# Fix untuk missing icon
-export GTK_THEME=Adwaita
-export NO_AT_BRIDGE=1
+# =============================================================================
+# VIRTUALBOX FIX: Explicitly filter out CD-ROM and loop devices
+# =============================================================================
+echo "Mendeteksi hard disk di VirtualBox..."
 
-# ------------------------------------------------------------------------------
-# Fungsi Bantu dengan branding
-# ------------------------------------------------------------------------------
+# Method 1: Pilih disk yang BUKAN sr0, BUKAN loop, dan BUKAN removable
+AVAILABLE_DISKS=()
+DISK_NAMES=()
+DISK_SIZES=()
+DISK_MODELS=()
 
-die() { 
-    zenity --error --title="LeakOS ERROR" --text="$1" --width=500
-    exit 1
-}
+while read -r name size tran model; do
+    # Skip CD-ROM, loop, dan removable media
+    if [[ "$name" == "sr0" ]] || [[ "$name" == "loop"* ]] || [[ "$tran" == "usb" ]]; then
+        continue
+    fi
+    
+    # Di VirtualBox, hard disk biasanya sda, sdb, atau vda
+    if [[ "$name" == "sda" ]] || [[ "$name" == "sdb" ]] || [[ "$name" == "vda" ]]; then
+        AVAILABLE_DISKS+=("$name")
+        DISK_NAMES+=("$name")
+        DISK_SIZES+=("$size")
+        DISK_MODELS+=("$model")
+    fi
+done < <(lsblk -dno NAME,SIZE,TRAN,MODEL 2>/dev/null | grep -v '^loop' | awk '{print $1, $2, $3, substr($0, index($0,$4))}')
 
-info() { 
-    zenity --info --title="LeakOS Info" --text="$1" --width=600
-}
-
-confirm() { 
-    # Gunakan banner plain untuk dialog untuk menghindari markup error
-    zenity --question --title="LeakOS Konfirmasi" \
-           --text="$LEAKOS_BANNER_PLAIN\n\n$1" \
-           --width=700 --ok-label="Ya" --cancel-label="Batal" || exit 0
-}
-
-choose_list() {
-    zenity --list --title="LeakOS - $1" \
-           --column="Disk" --column="Size" --column="Type" --column="Model" \
-           --width=700 --height=400 \
-           --print-column=1 \
-           "$@"
-}
-
-# ------------------------------------------------------------------------------
-# Wizard Persiapan
-# ------------------------------------------------------------------------------
-
-confirm "SELAMAT DATANG DI INSTALLER LeakOS!\n\nPartisi disk akan dibuat manual via cfdisk.\nData bisa hilang jika diformat!\n\nLanjutkan?" || exit 0
-
-# 1. Pilih disk untuk partitioning & GRUB - PERBAIKAN DISINI
-disks=()
-while IFS= read -r line; do 
-    # Parse dengan lebih hati-hati
-    name=$(echo "$line" | awk '{print $1}')
-    size=$(echo "$line" | awk '{print $2}')
-    tran=$(echo "$line" | awk '{print $3}')
-    model=$(echo "$line" | cut -d' ' -f4-)
-    disks+=("$name" "$size" "$tran" "$model")
-done < <(lsblk -dno NAME,SIZE,TRAN,MODEL | grep -v '^loop')
-
-if [ ${#disks[@]} -eq 0 ]; then
-    die "Tidak ada disk yang ditemukan!"
+# Jika tidak ada, ambil semua kecuali sr0
+if [ ${#AVAILABLE_DISKS[@]} -eq 0 ]; then
+    while read -r name size tran model; do
+        if [[ "$name" != "sr0" ]] && [[ "$name" != "loop"* ]]; then
+            AVAILABLE_DISKS+=("$name")
+            DISK_NAMES+=("$name")
+            DISK_SIZES+=("$size")
+            DISK_MODELS+=("$model")
+        fi
+    done < <(lsblk -dno NAME,SIZE,TRAN,MODEL 2>/dev/null | grep -v '^loop' | awk '{print $1, $2, $3, substr($0, index($0,$4))}')
 fi
 
-# Pilih disk
-selected=$(zenity --list \
-    --title="LeakOS - Pilih Disk" \
-    --column="Disk" --column="Size" --column="Type" --column="Model" \
-    --width=700 --height=400 \
-    "${disks[@]}") || exit 0
+# =============================================================================
+# Pilih Disk dengan Zenity List (Clear UI)
+# =============================================================================
 
+if [ ${#AVAILABLE_DISKS[@]} -eq 0 ]; then
+    zenity --error --text="TIDAK ADA HARD DISK DITEMUKAN!\n\nPastikan VirtualBox sudah menambahkan hard disk.\nCek dengan: lsblk" --width=500
+    exit 1
+fi
+
+# Build array untuk zenity
+ZENITY_LIST=()
+for i in "${!DISK_NAMES[@]}"; do
+    ZENITY_LIST+=("${DISK_NAMES[$i]}")
+    ZENITY_LIST+=("${DISK_SIZES[$i]}")
+    ZENITY_LIST+=("${DISK_MODELS[$i]:-Virtual Disk}")
+done
+
+# Tampilkan pilihan disk
+selected=$(zenity --list \
+    --title="LeakOS - Pilih Hard Disk (VirtualBox)" \
+    --text="<span foreground='red'><b>⚠️  PILIH HARD DISK, BUKAN CD-ROM (/dev/sr0) ⚠️</b></span>\n\n$LEAKOS_BANNER" \
+    --column="Disk" \
+    --column="Size" \
+    --column="Model" \
+    --width=700 \
+    --height=400 \
+    --radiolist \
+    --print-column=1 \
+    "${ZENITY_LIST[@]}")
+
+# Jika cancel, exit
 if [ -z "$selected" ]; then
-    die "Tidak ada disk yang dipilih!"
+    zenity --info --text="Instalasi dibatalkan." --width=400
+    exit 0
 fi
 
 TARGET_DISK="/dev/$selected"
+echo "Selected disk: $TARGET_DISK"
 
-# 2. Jalankan cfdisk interaktif - PERBAIKAN FORMAT TEXT
-info_text="Buka cfdisk untuk mempartisi disk:\n\n\
-Disk: $TARGET_DISK\n\n\
-Cara partisi untuk UEFI:\n\
-1. Pilih label [gpt]\n\
-2. [New] → Ukuran 512M-1G → Type: EFI System\n\
-3. [New] → Sisa space → Type: Linux filesystem\n\
-4. Opsional: [New] → Swap\n\
-5. [Write] → ketik 'yes' → [Quit]\n\n\
-Tekan OK untuk melanjutkan ke cfdisk."
+# =============================================================================
+# Konfirmasi dan Jalankan cfdisk
+# =============================================================================
 
-zenity --info --title="LeakOS - Panduan Partisi" \
-       --text="$info_text" --width=700 --ok-label="Buka cfdisk"
+# Confirm disk selection
+zenity --question \
+    --title="Konfirmasi Disk" \
+    --text="ANDA MEMILIH: <b>$TARGET_DISK</b>\n\nAPAKAH INI HARD DISK YANG BENAR?\n\nBUKAN /dev/sr0 (CD-ROM)!\n\nSemua data di disk ini AKAN DIHAPUS!" \
+    --width=600 \
+    --ok-label="Ya, ini Hard Disk" \
+    --cancel-label="Batal" || exit 0
+
+# Tampilkan panduan partisi
+cat << EOF | zenity --text-info \
+    --title="LeakOS - Panduan Partisi VirtualBox" \
+    --width=700 \
+    --height=500 \
+    --font="monospace" \
+    --ok-label="Buka cfdisk" \
+    --cancel-label="Batal"
+
+$LEAKOS_BANNER
+
+╔══════════════════════════════════════════════════════════════════╗
+║                    PANDUAN PARTISI VIRTUALBOX                    ║
+╚══════════════════════════════════════════════════════════════════╝
+
+DISK TARGET: $TARGET_DISK
+
+LANGKAH-LANGKAH DI cfdisk:
+
+1. PILIH LABEL:
+   → Pilih [gpt] untuk UEFI (recommended untuk VirtualBox)
+
+2. BUAT PARTISI EFI (hanya untuk UEFI):
+   → [New] → Size: 512M → Type: [EFI System]
+
+3. BUAT PARTISI ROOT:
+   → [New] → Size: (sisa space) → Type: [Linux filesystem]
+
+4. OPSIONAL - SWAP:
+   → [New] → Size: 2-4GB → Type: [Linux swap]
+
+5. WRITE & QUIT:
+   → [Write] → ketik 'yes' → [Quit]
+
+⚠️  PERINGATAN: Data di $TARGET_DISk akan dihapus!
+
+Tekan OK untuk membuka cfdisk...
+EOF
 
 # Jalankan cfdisk
 cfdisk "$TARGET_DISK"
 
+# Tunggu kernel update
 partprobe "$TARGET_DISK" 2>/dev/null || true
 sleep 3
 
-# 3. Pilih partisi root - PERBAIKAN PARSING
-parts=()
-while IFS= read -r line; do
-    part_name=$(echo "$line" | awk '{print $1}')
-    part_size=$(echo "$line" | awk '{print $2}')
-    part_fstype=$(echo "$line" | awk '{print $3}')
-    part_mount=$(echo "$line" | awk '{print $4}')
-    [ -z "$part_mount" ] && part_mount="-"
-    parts+=("$part_name" "$part_size" "$part_fstype" "$part_mount")
-done < <(lsblk -no NAME,SIZE,FSTYPE,MOUNTPOINT "$TARGET_DISK" 2>/dev/null | tail -n +2 || true)
+# =============================================================================
+# Deteksi Partisi yang Baru Dibuat
+# =============================================================================
 
-if [ ${#parts[@]} -eq 0 ]; then
-    die "Tidak ada partisi di $TARGET_DISK! Jalankan cfdisk dulu."
+# Function: get partition list
+get_partitions() {
+    local disk=$1
+    lsblk "$disk" -o NAME,SIZE,FSTYPE,MOUNTPOINT -l -n 2>/dev/null | grep -v "^${disk##*/}" | grep -v "^sr" | awk '{print $1, $2, $3, $4}'
+}
+
+echo "Mendeteksi partisi di $TARGET_DISK..."
+PARTITIONS=()
+while read -r name size fstype mount; do
+    if [[ "$name" != "" ]] && [[ "$name" != "sr"* ]]; then
+        PARTITIONS+=("/dev/$name" "$size" "${fstype:--}" "${mount:--}")
+    fi
+done < <(get_partitions "$TARGET_DISK")
+
+if [ ${#PARTITIONS[@]} -eq 0 ]; then
+    zenity --error --text="Tidak ada partisi ditemukan di $TARGET_DISK!\nJalankan cfdisk dulu." --width=500
+    exit 1
 fi
 
-selected_part=$(zenity --list \
-    --title="LeakOS - Pilih Partisi Root" \
-    --column="Partisi" --column="Size" --column="FSType" --column="Mount" \
-    --width=700 --height=400 \
-    --text="Pilih partisi untuk sistem (akan diformat ext4)" \
-    "${parts[@]}") || exit 0
+# =============================================================================
+# Pilih Partisi Root
+# =============================================================================
 
-if [ -z "$selected_part" ]; then
-    die "Partisi root tidak dipilih!"
-fi
-
-TARGET_PART="/dev/$selected_part"
-
-confirm "PERINGATAN!\nPartisi $TARGET_Part akan DIFORMAT ext4!\nSemua data akan hilang.\n\nLanjutkan?" || exit 0
-
-# ------------------------------------------------------------------------------
-# Input Konfigurasi
-# ------------------------------------------------------------------------------
-
-# Form user dengan validasi
-while true; do
-    USER_FORM=$(zenity --forms --title="LeakOS - Identitas Sistem" \
-        --add-entry="Username" \
-        --add-password="Password" \
-        --add-password="Konfirmasi Password" \
-        --add-entry="Hostname (default: leakos)" \
-        --separator="|") || exit 0
-    
-    IFS='|' read -r NEW_USERNAME PW1 PW2 HOSTNAME <<< "$USER_FORM"
-    
-    if [ -z "$NEW_USERNAME" ] || [ -z "$PW1" ]; then
-        zenity --error --text="Username dan password tidak boleh kosong!"
-        continue
-    fi
-    
-    if [ "$PW1" != "$PW2" ]; then
-        zenity --error --text="Password tidak cocok!"
-        continue
-    fi
-    
-    if [ -z "$HOSTNAME" ]; then
-        HOSTNAME="leakos"
-    fi
-    
-    break
-done
-
-# Layout keyboard
-KBD_LAYOUT=$(zenity --list --title="LeakOS - Layout Keyboard" \
-    --column="Kode" --column="Deskripsi" \
-    --width=400 --height=300 \
-    --radiolist --hide-header \
-    TRUE "us" "US English (Default)" \
-    FALSE "id" "Indonesia" \
-    FALSE "uk" "United Kingdom" \
-    FALSE "jp" "Japan" \
-    --print-column=2) || KBD_LAYOUT="us"
-
-# Locale
-LOCALE=$(zenity --list --title="LeakOS - Bahasa Sistem" \
-    --column="Locale" --column="Bahasa" \
-    --width=400 --height=200 \
-    --radiolist \
-    TRUE "en_US.UTF-8" "English (US)" \
-    FALSE "id_ID.UTF-8" "Bahasa Indonesia" \
-    --print-column=2) || LOCALE="en_US.UTF-8"
-
-# Timezone
-TIMEZONE=$(zenity --list --title="LeakOS - Zona Waktu" \
-    --width=550 --height=500 \
-    --column="Zona Waktu" --column="Lokasi" \
-    --radiolist \
-    TRUE "Asia/Jakarta" "Indonesia (WIB)" \
-    FALSE "Asia/Makassar" "Indonesia (WITA)" \
-    FALSE "Asia/Jayapura" "Indonesia (WIT)" \
-    --print-column=2) || TIMEZONE="Asia/Jakarta"
-
-# ------------------------------------------------------------------------------
-# Instalasi utama
-# ------------------------------------------------------------------------------
-
-(
-    echo "5"
-    echo "# Memformat $TARGET_PART sebagai ext4..."
-    mkfs.ext4 -F "$TARGET_PART" || exit 1
-
-    echo "15"
-    echo "# Mounting partisi..."
-    mkdir -p /mnt/target
-    mount "$TARGET_PART" /mnt/target
-
-    # Deteksi EFI partition
-    EFI_PART=$(lsblk -no NAME,PARTTYPE "$TARGET_DISK" | \
-        grep -i 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' | \
-        head -1 | awk '{print "/dev/" $1}')
-    
-    if [ -n "$EFI_PART" ] && [ -d "/sys/firmware/efi" ]; then
-        echo "25"
-        echo "# Memformat EFI partition..."
-        mkdir -p /mnt/target/boot/efi
-        mkfs.fat -F32 "$EFI_PART" 2>/dev/null || true
-        mount "$EFI_PART" /mnt/target/boot/efi
-        HAS_EFI=true
-    else
-        HAS_EFI=false
-    fi
-
-    echo "35"
-    echo "# Menyalin file sistem (rsync)..."
-    rsync -aHAX / /mnt/target/ \
-        --exclude={/dev/*,/proc/*,/sys/*,/tmp/*,/run/*,/mnt/*,/cow/*,/squash/*,/media/*,/lost+found}
-    
-    mkdir -p /mnt/target/{dev,proc,sys,run,tmp,boot}
-    chmod 1777 /mnt/target/tmp
-
-    echo "55"
-    echo "# Setup fstab..."
-    UUID_ROOT=$(blkid -s UUID -o value "$TARGET_PART")
-    cat << EOF > /mnt/target/etc/fstab
-UUID=$UUID_ROOT / ext4 defaults,noatime 0 1
-tmpfs /tmp tmpfs defaults,noatime,mode=1777 0 0
-EOF
-
-    if [ "$HAS_EFI" = true ] && [ -n "$EFI_PART" ]; then
-        UUID_EFI=$(blkid -s UUID -o value "$EFI_PART" 2>/dev/null || echo "")
-        if [ -n "$UUID_EFI" ]; then
-            echo "UUID=$UUID_EFI /boot/efi vfat defaults 0 2" >> /mnt/target/etc/fstab
+# Filter partisi dengan size > 1GB untuk root candidate
+ROOT_CANDIDATES=()
+for i in "${!PARTITIONS[@]}"; do
+    if (( i % 4 == 0 )); then
+        part="${PARTITIONS[$i]}"
+        size="${PARTITIONS[$((i+1))]}"
+        fstype="${PARTITIONS[$((i+2))]}"
+        
+        # Skip EFI partition (biasanya 512M) dan swap
+        if [[ "$part" != *"EFI"* ]] && [[ "$fstype" != "swap" ]] && [[ "$size" != *"512M"* ]]; then
+            ROOT_CANDIDATES+=("$part" "$size" "$fstype")
         fi
     fi
+done
 
+# Jika tidak ada candidate, ambil semua partisi non-EFI
+if [ ${#ROOT_CANDIDATES[@]} -eq 0 ]; then
+    ROOT_CANDIDATES=("${PARTITIONS[@]}")
+fi
+
+# Pilih partisi root
+selected_root=$(zenity --list \
+    --title="LeakOS - Pilih Partisi Root" \
+    --text="<span foreground='red'><b>⚠️  PILIH PARTISI UNTUK SISTEM (akan diformat ext4) ⚠️</b></span>" \
+    --column="Partisi" \
+    --column="Size" \
+    --column="Filesystem" \
+    --width=600 \
+    --height=400 \
+    --radiolist \
+    --print-column=1 \
+    "${ROOT_CANDIDATES[@]}")
+
+if [ -z "$selected_root" ]; then
+    zenity --error --text="Partisi root tidak dipilih!" --width=400
+    exit 1
+fi
+
+TARGET_PART="$selected_root"
+
+# =============================================================================
+# Deteksi EFI Partition
+# =============================================================================
+
+EFI_PART=""
+if [ -d "/sys/firmware/efi" ]; then
+    # Cari partisi EFI (type: c12a7328-f81f-11d2-ba4b-00a0c93ec93b)
+    for part in /dev/${TARGET_DISK##/dev/}*; do
+        if [ -b "$part" ]; then
+            part_type=$(blkid -o value -s PART_ENTRY_TYPE "$part" 2>/dev/null || echo "")
+            if [[ "$part_type" == *"c12a7328-f81f-11d2-ba4b-00a0c93ec93b"* ]]; then
+                EFI_PART="$part"
+                break
+            fi
+        fi
+    done
+    
+    # Fallback: cari partisi dengan size 512M yang belum diformat
+    if [ -z "$EFI_PART" ]; then
+        while read -r name size fstype mount; do
+            if [[ "$size" == "512M" ]] || [[ "$size" == "1G" ]]; then
+                EFI_PART="/dev/$name"
+                break
+            fi
+        done < <(get_partitions "$TARGET_DISK")
+    fi
+fi
+
+# =============================================================================
+# Form Konfigurasi User
+# =============================================================================
+
+# User form sederhana
+USERNAME=$(zenity --entry --title="LeakOS - Username" --text="Masukkan username:" --entry-text="leakos")
+[ -z "$USERNAME" ] && USERNAME="leakos"
+
+while true; do
+    PASSWORD=$(zenity --password --title="LeakOS - Password" --text="Masukkan password untuk $USERNAME:")
+    PASSWORD2=$(zenity --password --title="LeakOS - Konfirmasi Password" --text="Ketik ulang password:")
+    
+    if [ "$PASSWORD" = "$PASSWORD2" ] && [ -n "$PASSWORD" ]; then
+        break
+    else
+        zenity --error --text="Password tidak cocok atau kosong!" --width=400
+    fi
+done
+
+HOSTNAME=$(zenity --entry --title="LeakOS - Hostname" --text="Masukkan hostname:" --entry-text="leakos-vb")
+[ -z "$HOSTNAME" ] && HOSTNAME="leakos-vb"
+
+# =============================================================================
+# INSTALASI
+# =============================================================================
+
+# Konfirmasi akhir
+zenity --question \
+    --title="Konfirmasi Instalasi" \
+    --text="<b>RINGKASAN INSTALASI:</b>\n\n\
+Disk: $TARGET_DISK\n\
+Partisi Root: $TARGET_PART (akan DIFORMAT ext4)\n\
+Partisi EFI: ${EFI_PART:-Tidak ada (Legacy/BIOS)}\n\
+Username: $USERNAME\n\
+Hostname: $HOSTNAME\n\n\
+<span foreground='red'><b>PERINGATAN: Semua data di $TARGET_PART akan dihapus!</b></span>\n\n\
+LANJUTKAN INSTALASI?" \
+    --width=700 \
+    --ok-label="Install LeakOS" \
+    --cancel-label="Batal" || exit 0
+
+# Progress instalasi
+(
+    echo "10"
+    echo "# Memformat $TARGET_PART..."
+    mkfs.ext4 -F "$TARGET_PART" > /dev/null 2>&1 || exit 1
+    
+    echo "20"
+    echo "# Mounting partisi..."
+    mkdir -p /mnt/leakos
+    mount "$TARGET_PART" /mnt/leakos || exit 1
+    
+    if [ -n "$EFI_PART" ]; then
+        echo "25"
+        echo "# Memformat EFI partition..."
+        mkdir -p /mnt/leakos/boot/efi
+        mkfs.fat -F32 "$EFI_PART" > /dev/null 2>&1 || true
+        mount "$EFI_PART" /mnt/leakos/boot/efi || true
+    fi
+    
+    echo "30"
+    echo "# Menyalin system files..."
+    rsync -aHAX / /mnt/leakos/ \
+        --exclude={/dev/*,/proc/*,/sys/*,/tmp/*,/run/*,/mnt/*,/media/*,/cow/*,/squash/*,/lost+found,/boot/efi} \
+        --progress > /dev/null 2>&1
+    
+    echo "50"
+    echo "# Membuat direktori penting..."
+    mkdir -p /mnt/leakos/{dev,proc,sys,run,tmp,boot/efi}
+    chmod 1777 /mnt/leakos/tmp
+    
+    echo "60"
+    echo "# Setup fstab..."
+    UUID_ROOT=$(blkid -s UUID -o value "$TARGET_PART")
+    cat > /mnt/leakos/etc/fstab << FSTAB
+UUID=$UUID_ROOT / ext4 defaults,noatime 0 1
+tmpfs /tmp tmpfs defaults,noatime,mode=1777 0 0
+FSTAB
+    
+    if [ -n "$EFI_PART" ]; then
+        UUID_EFI=$(blkid -s UUID -o value "$EFI_PART" 2>/dev/null || echo "")
+        if [ -n "$UUID_EFI" ]; then
+            echo "UUID=$UUID_EFI /boot/efi vfat defaults 0 2" >> /mnt/leakos/etc/fstab
+        fi
+    fi
+    
     echo "70"
-    echo "# Chroot configuration..."
-    mount --bind /dev /mnt/target/dev
-    mount --bind /proc /mnt/target/proc
-    mount --bind /sys /mnt/target/sys
-    mount --bind /run /mnt/target/run
-
-    # Copy resolv.conf untuk network di chroot
-    cp -L /etc/resolv.conf /mnt/target/etc/resolv.conf 2>/dev/null || true
-
-    # Konfigurasi di dalam chroot
-    chroot /mnt/target /bin/bash << 'CHROOT_CMD'
+    echo "# Setup system di chroot..."
+    mount --bind /dev /mnt/leakos/dev
+    mount --bind /proc /mnt/leakos/proc
+    mount --bind /sys /mnt/leakos/sys
+    mount --bind /run /mnt/leakos/run
+    
+    cp /etc/resolv.conf /mnt/leakos/etc/resolv.conf 2>/dev/null || true
+    
+    # Chroot commands
+    chroot /mnt/leakos /bin/bash << CHROOT
         set -e
-        echo "Configuring system..."
         
         # Setup hostname
         echo "$HOSTNAME" > /etc/hostname
         
         # Setup timezone
-        ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+        ln -sf /usr/share/zoneinfo/Asia/Jakarta /etc/localtime
         
         # Setup locale
-        echo "$LOCALE UTF-8" >> /etc/locale.gen
+        echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
         locale-gen
-        echo "LANG=$LOCALE" > /etc/locale.conf
-        
-        # Setup keyboard
-        echo "KEYMAP=$KBD_LAYOUT" > /etc/vconsole.conf
+        echo "LANG=en_US.UTF-8" > /etc/locale.conf
         
         # Create user
-        useradd -m -G wheel,audio,video,storage -s /bin/bash "$NEW_USERNAME" 2>/dev/null || true
-        echo "$NEW_USERNAME:$PW1" | chpasswd
+        useradd -m -G wheel -s /bin/bash $USERNAME 2>/dev/null || true
+        echo "$USERNAME:$PASSWORD" | chpasswd
         
         # Setup sudo
         echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel-group
         chmod 0440 /etc/sudoers.d/wheel-group
         
-        # Disable root password
-        passwd -d root 2>/dev/null || true
-CHROOT_CMD
-
-    echo "85"
-    echo "# Install GRUB..."
-    if [ "$HAS_EFI" = true ]; then
-        chroot /mnt/target grub-install \
-            --target=x86_64-efi \
-            --efi-directory=/boot/efi \
-            --bootloader-id=LeakOS \
-            --recheck || true
-    else
-        chroot /mnt/target grub-install \
-            --target=i386-pc \
-            --recheck "$TARGET_DISK" || true
-    fi
+        # Setup network
+        systemctl enable NetworkManager 2>/dev/null || true
+        
+        # Install GRUB
+        if [ -n "$EFI_PART" ] && [ -d /sys/firmware/efi ]; then
+            grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=LeakOS --recheck
+        else
+            grub-install --target=i386-pc --recheck $TARGET_DISK
+        fi
+        
+        grub-mkconfig -o /boot/grub/grub.cfg
+CHROOT
     
-    chroot /mnt/target grub-mkconfig -o /boot/grub/grub.cfg || true
-
-    echo "100"
-    echo "# Instalasi selesai! Cleaning up..."
+    echo "90"
+    echo "# Cleanup..."
     sync
-    umount -R /mnt/target 2>/dev/null || true
-
+    umount -R /mnt/leakos 2>/dev/null || true
+    
+    echo "100"
+    echo "# Instalasi selesai!"
+    
 ) | zenity --progress \
     --title="LeakOS Installer" \
     --text="Memulai instalasi..." \
     --percentage=0 \
     --auto-close \
-    --width=700
+    --width=600
 
-if [ ${PIPESTATUS[0]} -eq 0 ]; then
-    success_msg="INSTALASI BERHASIL!\n\n\
+# =============================================================================
+# Selesai
+# =============================================================================
+
+if [ $? -eq 0 ]; then
+    zenity --question \
+        --title="LeakOS - Instalasi Berhasil" \
+        --text="<b><span foreground='green'>✓ INSTALASI BERHASIL!</span></b>\n\n\
+$LEAKOS_BANNER\n\n\
 Detail Sistem:\n\
-- User: $NEW_USERNAME\n\
-- Hostname: $HOSTNAME\n\
-- Keyboard: $KBD_LAYOUT\n\
-- Locale: $LOCALE\n\
-- Timezone: $TIMEZONE\n\
-- Disk: $TARGET_DISK\n\
-- Partisi Root: $TARGET_PART\n\n\
+• Disk: $TARGET_DISK\n\
+• Root: $TARGET_PART\n\
+• Boot: ${EFI_PART:-Legacy/BIOS}\n\
+• User: $USERNAME\n\
+• Hostname: $HOSTNAME\n\n\
 Reboot sekarang dan lepaskan media instalasi.\n\n\
-© 2025-2026 leakos.dev"
+© 2025-2026 leakos.dev" \
+        --width=700 \
+        --ok-label="Reboot" \
+        --cancel-label="Exit"
     
-    zenity --info --title="LeakOS - Sukses" \
-           --text="$LEAKOS_BANNER_PLAIN\n\n$success_msg" \
-           --width=600 --ok-label="Reboot"
-    
-    # Confirm reboot
-    if zenity --question --title="Reboot" \
-            --text="Reboot sistem sekarang?" \
-            --width=400; then
+    if [ $? -eq 0 ]; then
         reboot
     fi
 else
-    die "Instalasi gagal! Cek log di terminal."
+    zenity --error --text="Instalasi gagal! Cek log di terminal." --width=500
 fi
