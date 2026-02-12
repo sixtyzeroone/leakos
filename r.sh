@@ -211,19 +211,17 @@ echo 50; echo "# 🧠 Mengcopy kernel..."
 mkdir -p /mnt/leakos/boot
 
 # Copy kernel dan initramfs
-cp -f /boot/vmlinuz-* /mnt/leakos/boot/ 2>/dev/null || true
-cp -f /boot/initrd.img-* /mnt/leakos/boot/ 2>/dev/null || true
-cp -f /boot/initramfs-* /mnt/leakos/boot/ 2>/dev/null || true
+cp -f /boot/vmlinuz /mnt/leakos/boot/ 2>/dev/null || true
+
 
 # Fallback
-if ! ls /mnt/leakos/boot/vmlinuz-* >/dev/null 2>&1; then
-    cp -f /run/media/*/boot/vmlinuz-* /mnt/leakos/boot/ 2>/dev/null || true
-    cp -f /run/media/*/boot/initrd.img-* /mnt/leakos/boot/ 2>/dev/null || true
-    cp -f /run/media/*/boot/initramfs-* /mnt/leakos/boot/ 2>/dev/null || true
+if ! ls /mnt/leakos/boot/vmlinuz >/dev/null 2>&1; then
+    cp -f /run/media/*/boot/vmlinuz /mnt/leakos/boot/ 2>/dev/null || true
+   
 fi
 
 # Cek kernel
-if ! ls /mnt/leakos/boot/vmlinuz-* >/dev/null 2>&1; then
+if ! ls /mnt/leakos/boot/vmlinuz >/dev/null 2>&1; then
     echo "❌ KERNEL TIDAK DITEMUKAN!"
     exit 1
 fi
