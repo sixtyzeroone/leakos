@@ -98,7 +98,7 @@ sleep 2
 ROOT_PART=""
 
 while read -r name fstype size; do
-    if [[ "$fstype" != "vfat" ]]; then
+    if [[ "$fstype" != "ext4" ]]; then
         ROOT_PART="/dev/$name"
     fi
 done < <(lsblk -ln -o NAME,FSTYPE,SIZE "$TARGET_DISK" | tail -n +2)
@@ -177,7 +177,7 @@ echo 55; echo "# Install kernel"
 mkdir -p /mnt/leakos/boot
 
 cp -v /boot/vmlinuz* /mnt/leakos/boot/ 2>/dev/null || true
-cp -v /boot/initramfs* /mnt/leakos/boot/ 2>/dev/null || true
+cp -v /boot/initrd.img-5.16.16* /mnt/leakos/boot/ 2>/dev/null || true
 #cp -v /run/media/*/boot/vmlinuz* /mnt/leakos/boot/ 2>/dev/null || true
 #cp -v /run/media/*/boot/initramfs* /mnt/leakos/boot/ 2>/dev/null || true
 
@@ -193,6 +193,7 @@ echo 70; echo "# Setup system"
 mount --bind /dev  /mnt/leakos/dev
 mount --bind /proc /mnt/leakos/proc
 mount --bind /sys  /mnt/leakos/sys
+mount --bind /dev/pts /mnt/leakos/dev/pts   # Tambah ini untuk stabilitas chroot
 
 chroot /mnt/leakos /bin/bash <<EOF
 echo "$HOSTNAME" > /etc/hostname
@@ -203,11 +204,23 @@ echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
 # Set timezone
 ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 # Set locale
-echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
-locale-gen
+#echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+#locale-gen
 
 # Set keyboard layout
-localectl set-keymap $KEYBOARD_LAYOUT
+#localectl set-keymap $KEYBOARD_LAYOUT
+
+ROOT_UUID=\$(blkid -s UUID -o value "$ROOT_PART")
+
+cat > /etc/fstab <<EOT
+# /etc/fstab: static file system information.
+#
+# Use 'blkid' to print the universally unique identifier for a device; this may
+# be used with UUID= as a more robust way to name devices that works even if
+# disks are added and removed. See fstab(5).
+
+# Root filesystem (ext4)
+UUID=\$ROOT_UUID    /               ext4    defaults        0       1
 EOF
 
 # =============================================================================
@@ -215,7 +228,7 @@ EOF
 # =============================================================================
 echo 85; echo "# Install GRUB (BIOS)"
 chroot /mnt/leakos grub-install \
-    --target=i386-pc "$TARGET_DISK"
+    --target=i386-pc --recheck "$TARGET_DISK"
 
 chroot /mnt/leakos grub-mkconfig -o /boot/grub/grub.cfg
 
